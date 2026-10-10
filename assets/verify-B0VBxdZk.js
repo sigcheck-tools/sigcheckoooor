@@ -38294,15 +38294,18 @@ function minimalDetails(txType, typeId, numSignatures, rawHex, error) {
 		parseErrors: [error]
 	};
 }
+var C_CHAIN_IMPORT_TYPE_ID = 0;
 var C_CHAIN_EXPORT_TYPE_ID = 1;
 /**
-* Parse a C-Chain export, which the C-Chain encodes with its own codec:
-* AVAX leaves C-Chain accounts and lands in the shared memory of the
-* destination chain, where an import on that chain picks it up.
+* Parse a C-Chain export or import, which the C-Chain encodes with its
+* own codec. An export takes AVAX out of C-Chain accounts into the shared
+* memory of the destination chain, where an import on that chain picks
+* it up; an import does the reverse, crediting C-Chain accounts with
+* what another chain exported.
 */
-function parseCChainExport(txBytes, numSignatures, rawHex) {
+function parseCChainTx(txBytes, typeId, numSignatures, rawHex) {
 	const parseErrors = [];
-	const unknown = (message) => minimalDetails(`Unknown (typeId ${C_CHAIN_EXPORT_TYPE_ID})`, C_CHAIN_EXPORT_TYPE_ID, numSignatures, rawHex, message);
+	const unknown = (message) => minimalDetails(`Unknown (typeId ${typeId})`, typeId, numSignatures, rawHex, message);
 	let tx;
 	try {
 		tx = Cc.unpackWithManager("EVM", txBytes);
@@ -38311,29 +38314,53 @@ function parseCChainExport(txBytes, numSignatures, rawHex) {
 		console.warn("[keystone-qr] parseTxDetails: C-Chain codec unpack failed:", msg);
 		return unknown(`Codec unpack failed: ${msg}`);
 	}
-	if (!Go.isExportTx(tx)) return unknown("The C-Chain transaction is not an export.");
-	const networkId = tx.networkId.value();
-	const evmInputs = tx.ins.map((input) => ({
-		address: Cc.bufferToHex(input.address.toBytes()).toLowerCase(),
-		amount: input.amount.value(),
-		assetId: input.assetId.toString(),
-		nonce: input.nonce.value()
-	}));
-	return {
-		txType: "CChainExportTx",
-		typeId: C_CHAIN_EXPORT_TYPE_ID,
-		networkId,
-		blockchainId: tx.blockchainId.toString(),
-		destinationChain: tx.destinationChain.toString(),
-		inputs: [],
-		outputs: [],
-		evmInputs,
-		exportedOutputs: extractOutputs(tx.exportedOutputs, Dn.getHRP(networkId), parseErrors),
-		memo: "",
-		numSignatures,
-		rawHex,
-		parseErrors
-	};
+	if (Go.isExportTx(tx)) {
+		const networkId = tx.networkId.value();
+		const evmInputs = tx.ins.map((input) => ({
+			address: Cc.bufferToHex(input.address.toBytes()).toLowerCase(),
+			amount: input.amount.value(),
+			assetId: input.assetId.toString(),
+			nonce: input.nonce.value()
+		}));
+		return {
+			txType: "CChainExportTx",
+			typeId,
+			networkId,
+			blockchainId: tx.blockchainId.toString(),
+			destinationChain: tx.destinationChain.toString(),
+			inputs: [],
+			outputs: [],
+			evmInputs,
+			exportedOutputs: extractOutputs(tx.exportedOutputs, Dn.getHRP(networkId), parseErrors),
+			memo: "",
+			numSignatures,
+			rawHex,
+			parseErrors
+		};
+	}
+	if (Go.isImportTx(tx)) {
+		const evmOutputs = tx.Outs.map((output) => ({
+			address: Cc.bufferToHex(output.address.toBytes()).toLowerCase(),
+			amount: output.amount.value(),
+			assetId: output.assetId.toString()
+		}));
+		return {
+			txType: "CChainImportTx",
+			typeId,
+			networkId: tx.networkId.value(),
+			blockchainId: tx.blockchainId.toString(),
+			sourceChain: tx.sourceChain.toString(),
+			inputs: [],
+			outputs: [],
+			importedInputs: extractInputs(tx.importedInputs, parseErrors),
+			evmOutputs,
+			memo: "",
+			numSignatures,
+			rawHex,
+			parseErrors
+		};
+	}
+	return unknown("The C-Chain transaction is neither an export nor an import.");
 }
 /**
 * Parse PVM transaction bytes using the avalanchejs codec.
@@ -38348,7 +38375,7 @@ function parseTxDetails(txBytes, numSignatures) {
 	const parseErrors = [];
 	if (txBytes.length < 6) return minimalDetails("Unparseable", -1, numSignatures, rawHex, "Transaction bytes too short");
 	const fallbackTypeId = new DataView(txBytes.buffer, txBytes.byteOffset, txBytes.byteLength).getUint32(2);
-	if (fallbackTypeId === C_CHAIN_EXPORT_TYPE_ID) return parseCChainExport(txBytes, numSignatures, rawHex);
+	if (fallbackTypeId === C_CHAIN_EXPORT_TYPE_ID || fallbackTypeId === C_CHAIN_IMPORT_TYPE_ID) return parseCChainTx(txBytes, fallbackTypeId, numSignatures, rawHex);
 	let tx;
 	try {
 		tx = Cc.unpackWithManager("PVM", txBytes);
@@ -38572,7 +38599,8 @@ function sumAvax(items) {
 * the cross-chain `tx.outs` count toward the output side. Without
 * accounting for those, exports look like the entire export amount
 * was burned as fee, and imports look like inputs vanished. A C-Chain
-* export spends from C-Chain accounts, which count as inputs. Non-AVAX
+* export spends from C-Chain accounts, which count as inputs, and a
+* C-Chain import pays C-Chain accounts, which count as outputs. Non-AVAX
 * assets are excluded because fees are always paid in AVAX.
 *
 * Returns null when the fee cannot be meaningfully computed (zero
@@ -38581,7 +38609,7 @@ function sumAvax(items) {
 function computeFee(details) {
 	const totalIn = sumAvax(details.inputs) + sumAvax(details.importedInputs ?? []) + sumAvax(details.evmInputs ?? []);
 	if (totalIn === 0n) return null;
-	const fee = totalIn - (sumAvax(details.outputs) + sumAvax(details.stakeOutputs ?? []) + sumAvax(details.exportedOutputs ?? []));
+	const fee = totalIn - (sumAvax(details.outputs) + sumAvax(details.stakeOutputs ?? []) + sumAvax(details.exportedOutputs ?? []) + sumAvax(details.evmOutputs ?? []));
 	return fee >= 0n ? fee : null;
 }
 //#endregion
@@ -38605,7 +38633,9 @@ var MAX_FEE_NAVAX = 50000000n;
 var ALLOWED_TX_TYPES = new Set([
 	"AddPermissionlessValidatorTx",
 	"CChainExportTx",
-	"ImportTx"
+	"ImportTx",
+	"ExportTx",
+	"CChainImportTx"
 ]);
 var NETWORK_RULES = {
 	mainnet: {
@@ -38759,10 +38789,15 @@ function checkCChainExport(details, own, ownEvm, rules, expected) {
 			message: `C-Chain input ${i + 1} spends from ${input.address}, which is not your C-Chain address.`
 		});
 	});
+	violations.push(...checkExported(details, own, rules, expected, "P-Chain"));
+	return violations;
+}
+function checkExported(details, own, rules, expected, destinationName) {
+	const violations = [];
 	const exported = details.exportedOutputs ?? [];
 	if (exported.length === 0) violations.push({
 		rule: "outputs",
-		message: "The export sends nothing to the P-Chain."
+		message: `The export sends nothing to the ${destinationName}.`
 	});
 	violations.push(...checkOutputs("Exported output", exported, own, rules));
 	if (expected) {
@@ -38774,23 +38809,53 @@ function checkCChainExport(details, own, ownEvm, rules, expected) {
 	}
 	return violations;
 }
-function checkImport(details, rules) {
+function checkPChainExport(details, own, ownCChain, rules, expected) {
 	const violations = [];
-	if (details.sourceChain !== rules.cChainId) violations.push({
+	if (details.destinationChain !== rules.cChainId) violations.push({
 		rule: "chain",
-		message: `The import brings AVAX from chain ${details.sourceChain || "(missing)"}; only the C-Chain is allowed.`
+		message: `The export sends AVAX to chain ${details.destinationChain || "(missing)"}; only the C-Chain is allowed.`
+	});
+	violations.push(...checkExported(details, ownCChain, rules, expected, "C-Chain"));
+	(details.exportedOutputs ?? []).forEach((out, i) => {
+		if (out.addresses.some((a) => own.has(a))) violations.push({
+			rule: "export-to-p-chain-key",
+			message: `Exported output ${i + 1} pays your P-Chain key, which cannot import it on the C-Chain.`
+		});
+	});
+	return violations;
+}
+function checkImported(details, rules, source, outputs) {
+	const violations = [];
+	if (details.sourceChain !== source.chainId) violations.push({
+		rule: "chain",
+		message: `The import brings AVAX from chain ${details.sourceChain || "(missing)"}; only the ${source.name} is allowed.`
 	});
 	const imported = details.importedInputs ?? [];
 	if (imported.length === 0) violations.push({
 		rule: "inputs",
-		message: "The import brings nothing in from the C-Chain."
+		message: `The import brings nothing in from the ${source.name}.`
 	});
 	imported.forEach((input, i) => {
 		violations.push(...checkAsset(`Imported input ${i + 1}`, input.assetId, rules));
 	});
-	if (details.outputs.length === 0) violations.push({
+	if (outputs.length === 0) violations.push({
 		rule: "outputs",
 		message: "The import pays nothing out, so all it brings in would be burned."
+	});
+	return violations;
+}
+function checkCChainImport(details, ownEvm, rules) {
+	const outputs = details.evmOutputs ?? [];
+	const violations = checkImported(details, rules, {
+		chainId: ZERO_ID,
+		name: "P-Chain"
+	}, outputs);
+	outputs.forEach((output, i) => {
+		violations.push(...checkAsset(`C-Chain output ${i + 1}`, output.assetId, rules));
+		if (!ownEvm.has(output.address.toLowerCase())) violations.push({
+			rule: "own-address",
+			message: `C-Chain output ${i + 1} pays ${output.address}, which is not your C-Chain address.`
+		});
 	});
 	return violations;
 }
@@ -38813,7 +38878,9 @@ function checkSigningPolicy(details, ctx) {
 		});
 		return violations;
 	}
-	if (own.size === 0) violations.push({
+	const ownEvm = new Set((ctx.ownEvmAddresses ?? []).map((a) => a.toLowerCase()));
+	const ownCChain = new Set((ctx.ownCChainAddresses ?? []).map(withPChainPrefix));
+	if ((details.txType === "CChainImportTx" ? ownEvm : details.txType === "ExportTx" && details.outputs.length === 0 ? ownCChain : own).size === 0) violations.push({
 		rule: "own-address",
 		message: "No addresses of yours are known, so the owners cannot be checked."
 	});
@@ -38821,8 +38888,7 @@ function checkSigningPolicy(details, ctx) {
 		rule: "network",
 		message: `The transaction is for network ${details.networkId}, but the tool is set to ${ctx.network}.`
 	});
-	const isExport = details.txType === "CChainExportTx";
-	const [homeChain, homeChainName] = isExport ? [rules.cChainId, "C-Chain"] : [ZERO_ID, "P-Chain"];
+	const [homeChain, homeChainName] = details.txType === "CChainExportTx" || details.txType === "CChainImportTx" ? [rules.cChainId, "C-Chain"] : [ZERO_ID, "P-Chain"];
 	if (details.blockchainId !== homeChain) violations.push({
 		rule: "chain",
 		message: `The transaction targets chain ${details.blockchainId}; only the ${homeChainName} is allowed.`
@@ -38831,12 +38897,19 @@ function checkSigningPolicy(details, ctx) {
 		rule: "memo",
 		message: "The transaction carries a memo; memos are not allowed."
 	});
-	if (isExport) {
-		const ownEvm = new Set((ctx.ownEvmAddresses ?? []).map((a) => a.toLowerCase()));
-		violations.push(...checkCChainExport(details, own, ownEvm, rules, ctx.expectedTransfer));
-	} else {
-		if (details.txType === "ImportTx") violations.push(...checkImport(details, rules));
-		else if (details.inputs.length === 0) violations.push({
+	if (details.txType === "CChainExportTx") violations.push(...checkCChainExport(details, own, ownEvm, rules, ctx.expectedTransfer));
+	else if (details.txType === "CChainImportTx") violations.push(...checkCChainImport(details, ownEvm, rules));
+	else {
+		if (details.txType === "ImportTx") {
+			violations.push(...checkImported(details, rules, {
+				chainId: rules.cChainId,
+				name: "C-Chain"
+			}, details.outputs));
+			if (details.inputs.length > 0) violations.push({
+				rule: "inputs",
+				message: "The import also spends AVAX already on the P-Chain; an import may spend only what it brings in."
+			});
+		} else if (details.inputs.length === 0) violations.push({
 			rule: "inputs",
 			message: "The transaction spends no inputs."
 		});
@@ -38844,6 +38917,7 @@ function checkSigningPolicy(details, ctx) {
 			violations.push(...checkAsset(`Input ${i + 1}`, input.assetId, rules));
 		});
 		violations.push(...checkOutputs("Output", details.outputs, own, rules));
+		if (details.txType === "ExportTx") violations.push(...checkPChainExport(details, own, ownCChain, rules, ctx.expectedTransfer));
 	}
 	if (details.txType === "AddPermissionlessValidatorTx") {
 		violations.push(...checkValidator(details, own, rules, ctx.nowSeconds));
@@ -38869,7 +38943,9 @@ function checkSigningPolicy(details, ctx) {
 * for. Instead every output and owner must pay 1 and the same address,
 * which the user then compares with the From address the Keystone works
 * out from its own key, and that address is held to the full signing
-* policy.
+* policy. A P-Chain export pays 2 addresses by design, its change to the
+* P-Chain key and the AVAX to the C-Chain key, so each of those must be 1
+* address; a C-Chain import must credit 1 0x address.
 */
 /**
 * An address as the Keystone prints it, so each one on the page can be
@@ -38887,16 +38963,38 @@ function keystoneForm(address) {
 function isWalletIndex(value) {
 	return Number.isSafeInteger(value) && value >= 0 && value < 2 ** 31;
 }
-/** Every P-Chain address the transaction pays or names as an owner. */
+/**
+* Every P-Chain address the transaction pays or names as an owner, apart
+* from what a P-Chain export sends to the C-Chain, which is counted on
+* its own.
+*/
 function paidAddresses(details) {
 	const addresses = /* @__PURE__ */ new Set();
+	const exported = details.txType === "ExportTx" ? [] : details.exportedOutputs ?? [];
 	for (const out of [
 		...details.outputs,
 		...details.stakeOutputs ?? [],
-		...details.exportedOutputs ?? []
+		...exported
 	]) out.addresses.forEach((a) => addresses.add(a));
 	for (const owner of [details.validatorRewardsOwner, details.delegatorRewardsOwner]) owner?.addresses.forEach((a) => addresses.add(a));
-	return addresses;
+	return [...addresses];
+}
+var unique = (values) => [...new Set(values)];
+/**
+* Why the transaction does not pay 1 address where a request from this
+* tool would, in the words of `what`, or nothing when it does. Leaving out
+* `none` allows no address at all.
+*/
+function spread(addresses, what, form = keystoneForm) {
+	if (addresses.length === 0) return what.none === void 0 ? [] : [{
+		rule: "single-recipient",
+		message: what.none
+	}];
+	if (addresses.length === 1) return [];
+	return [{
+		rule: "single-recipient",
+		message: `${what.many} ${addresses.length} different addresses (${addresses.map(form).join(", ")}), ${what.tail}`
+	}];
 }
 function checkRequest(details, nowSeconds, request) {
 	const { unknownCborKeys } = request;
@@ -38925,29 +39023,52 @@ function checkRequest(details, nowSeconds, request) {
 			}
 		]
 	};
-	const paid = [...paidAddresses(details)];
+	const isPChainExport = details.txType === "ExportTx";
+	const isCChainImport = details.txType === "CChainImportTx";
+	const paid = paidAddresses(details);
+	const exportedTo = isPChainExport ? unique((details.exportedOutputs ?? []).flatMap((o) => o.addresses)) : [];
+	const credited = isCChainImport ? unique((details.evmOutputs ?? []).map((o) => o.address)) : [];
 	const recipient = paid.length === 1 ? paid[0] : void 0;
+	const exportRecipient = exportedTo.length === 1 ? exportedTo[0] : void 0;
+	const evmRecipient = credited.length === 1 ? credited[0] : void 0;
 	const evmSenders = (details.evmInputs ?? []).map((input) => input.address);
 	const policy = checkSigningPolicy(details, {
 		network,
 		ownAddresses: recipient ? [recipient] : [],
-		ownEvmAddresses: evmSenders,
+		ownEvmAddresses: isCChainImport ? evmRecipient ? [evmRecipient] : [] : evmSenders,
+		ownCChainAddresses: exportRecipient ? [exportRecipient] : [],
 		nowSeconds
 	});
-	const violations = recipient ? [...fields, ...policy] : [
+	const groups = isCChainImport ? spread(credited, {
+		none: "The import credits no C-Chain address at all.",
+		many: "The import credits",
+		tail: "where a request from this tool credits only yours."
+	}, (a) => a) : isPChainExport ? [...spread(paid, {
+		many: "The export's change pays",
+		tail: "where a request from this tool pays it only to you."
+	}), ...spread(exportedTo, {
+		none: "The export sends AVAX to no address at all.",
+		many: "The export sends AVAX to",
+		tail: "where a request from this tool sends it only to your C-Chain key."
+	})] : spread(paid, {
+		none: "The transaction pays no address at all.",
+		many: "The transaction pays",
+		tail: "where a request from this tool pays only yours."
+	});
+	const violations = [
 		...fields,
-		{
-			rule: "single-recipient",
-			message: paid.length === 0 ? "The transaction pays no address at all." : `The transaction pays ${paid.length} different addresses (${paid.map(keystoneForm).join(", ")}), where a request from this tool pays only yours.`
-		},
-		...policy.filter((v) => v.rule !== "own-address")
+		...groups,
+		...groups.length > 0 ? policy.filter((v) => v.rule !== "own-address") : policy
 	];
 	return {
 		pass: violations.length === 0,
 		violations,
 		recipient,
 		keystoneRecipient: recipient ? keystoneForm(recipient) : void 0,
+		exportRecipient,
+		keystoneExportRecipient: exportRecipient ? keystoneForm(exportRecipient) : void 0,
 		evmSender: evmSenders.length === 1 ? evmSenders[0] : void 0,
+		evmRecipient,
 		walletIndex
 	};
 }
@@ -69599,11 +69720,16 @@ var ScanRequest = ({ onScan, error }) => {
 };
 //#endregion
 //#region src/verify/RequestReport.tsx
-var KEYSTONE_METHODS = {
-	AddPermissionlessValidatorTx: "AddPermlessValidator",
-	CChainExportTx: "C to P Export",
-	ImportTx: "Import Tx, Sending from C-Chain"
-};
+function keystoneMethod(details) {
+	switch (details.txType) {
+		case "AddPermissionlessValidatorTx": return "AddPermlessValidator";
+		case "CChainExportTx": return "C to P Export";
+		case "ImportTx": return "Import Tx, Sending from C-Chain";
+		case "ExportTx": return knownNetwork(details.networkId) === "mainnet" ? "P to C Export" : "P to Unknown Export";
+		case "CChainImportTx": return "Import Tx, Sending from P-Chain";
+		default: return details.txType;
+	}
+}
 function utc(unixSeconds) {
 	return (/* @__PURE__ */ new Date(Number(unixSeconds) * 1e3)).toISOString().replace("T", " ").slice(0, 19) + " UTC";
 }
@@ -69634,10 +69760,12 @@ var Owner = ({ owner, stakeableLocktime }) => /* @__PURE__ */ (0, import_jsx_run
 var RequestReport = ({ details, check, checkedAt, onScanAgain }) => {
 	const isValidator = details.txType === "AddPermissionlessValidatorTx";
 	const isExport = details.txType === "CChainExportTx";
+	const isPChainExport = details.txType === "ExportTx";
+	const isCChainImport = details.txType === "CChainImportTx";
 	const fee = computeFee(details);
-	const amount = isValidator ? details.stakeAmount : isExport ? sumAvax(details.exportedOutputs ?? []) : sumAvax(details.outputs);
+	const amount = isValidator ? details.stakeAmount : isExport || isPChainExport ? sumAvax(details.exportedOutputs ?? []) : details.importedInputs ? sumAvax(details.importedInputs) : sumAvax(details.outputs);
 	const outputs = [
-		...details.outputs.map((o, i) => [isValidator ? `Change ${i + 1}` : `Output ${i + 1}`, o]),
+		...details.outputs.map((o, i) => [isValidator || isPChainExport ? `Change ${i + 1}` : `Output ${i + 1}`, o]),
 		...(details.stakeOutputs ?? []).map((o, i) => [`Stake ${i + 1}`, o]),
 		...(details.exportedOutputs ?? []).map((o, i) => [`Exported ${i + 1}`, o])
 	];
@@ -69648,8 +69776,11 @@ var RequestReport = ({ details, check, checkedAt, onScanAgain }) => {
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: check.pass ? "Matches what this tool builds" : "Do not approve this on the Keystone" }),
 				check.pass ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-					"Everything pays 1 address, and the request passes every check this tool makes before signing",
+					isPChainExport ? check.recipient ? "Its change pays 1 address and its AVAX goes to 1 other" : "It has no change and its AVAX goes to 1 address" : isCChainImport ? "It credits 1 C-Chain address" : "Everything pays 1 address",
+					", and the request passes every check this tool makes before signing",
 					isExport ? ", except which C-Chain balance it spends, which only you and the Keystone can confirm" : "",
+					isPChainExport ? ", except whether the AVAX goes to your C-Chain key, which neither this phone nor the Keystone can tell while signing this export" : "",
+					isCChainImport ? ", except whether that C-Chain address is yours, which only you can confirm" : "",
 					". Now compare the values below with the Keystone's screen."
 				] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: check.violations.map((v, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: v.message }, i)) }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -69679,8 +69810,18 @@ var RequestReport = ({ details, check, checkedAt, onScanAgain }) => {
 						children: "This phone cannot tell which C-Chain address is yours. Make sure the Keystone's From line shows exactly this, and that it is your address."
 					})]
 				}),
+				isCChainImport && check.evmRecipient && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Row, {
+					label: "To (C-Chain address, not checked)",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mono address",
+						children: check.evmRecipient
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "note",
+						children: "This phone cannot tell which C-Chain address is yours. Make sure the Keystone's To line shows exactly this, and that it is your address. Its From line, which it works out from your C-Chain key, must be exactly the address the export you signed for this move sent the AVAX to. Keep a note of that From line, away from the computer, to check the To line of later exports from the P-Chain against."
+					})]
+				}),
 				check.keystoneRecipient && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Row, {
-					label: isExport ? "To" : "From, and every address it pays",
+					label: isExport ? "To" : isPChainExport ? "From, and the change" : "From, and every address it pays",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "mono address",
@@ -69703,15 +69844,25 @@ var RequestReport = ({ details, check, checkedAt, onScanAgain }) => {
 						})
 					]
 				}),
+				isPChainExport && check.keystoneExportRecipient && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Row, {
+					label: "To, for the AVAX moved (your C-Chain key, not checked)",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mono address",
+						children: check.keystoneExportRecipient
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "note",
+						children: "Neither this phone nor the Keystone can tell whether this is your C-Chain key, and the AVAX goes wherever it says. Compare every character with the From line the Keystone showed when it signed an earlier import onto the C-Chain, which it works out from that key. Without such a note, this check relies on the computer that built the request, so move a small amount first and write down the From line of its import. It must not be this export's own From address, your P-Chain key, which cannot bring the AVAX in on the C-Chain."
+					})]
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
 					label: "Method",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "mono",
-						children: KEYSTONE_METHODS[details.txType] ?? details.txType
+						children: keystoneMethod(details)
 					})
 				}),
 				amount !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
-					label: isValidator ? "Stake" : "Amount",
+					label: isValidator ? "Stake" : "Value",
 					children: formatAvax(amount)
 				}),
 				isValidator && details.endTime !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Row, {
