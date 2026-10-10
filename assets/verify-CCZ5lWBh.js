@@ -38788,6 +38788,21 @@ function networkName(id) {
 	return network ? NETWORKS[network].label : `Network ${id}`;
 }
 /**
+* An amount as the firmware prints it: nAVAX divided as a 64-bit float
+* and written in its shortest form, such as `1.5 AVAX` or `2000 AVAX`,
+* never in exponent form.
+*/
+function keystoneAvax(nAvax) {
+	const avax = Number(nAvax) / 1e9;
+	let text = String(avax);
+	if (text.includes("e")) {
+		text = avax.toFixed(9);
+		while (text.endsWith("0")) text = text.slice(0, -1);
+		if (text.endsWith(".")) text = text.slice(0, -1);
+	}
+	return `${text} AVAX`;
+}
+/**
 * The time as Keystone firmware 2.4.0 prints it. Its formatter adds 8
 * to the UTC hour without moving the date (so 16:00 prints as 24:00 and
 * 20:00 as 04:00 on the same day) and still labels the result UTC.
@@ -38872,7 +38887,8 @@ var ALLOWED_TX_TYPES = new Set([
 	"CChainExportTx",
 	"ImportTx",
 	"ExportTx",
-	"CChainImportTx"
+	"CChainImportTx",
+	"BaseTx"
 ]);
 var NETWORK_RULES = {
 	mainnet: {
@@ -39006,6 +39022,22 @@ function checkValidator(details, own, rules, nowSeconds) {
 		message: `${label} is missing.`
 	});
 	else violations.push(...checkOwner(label, owner, own));
+	return violations;
+}
+function checkCombine(details) {
+	const violations = [];
+	if (details.outputs.length !== 1) violations.push({
+		rule: "combine",
+		message: `A send here may only combine UTXOs into 1 output back to you, but this one pays ${details.outputs.length} outputs.`
+	});
+	if (details.inputs.length < 2) violations.push({
+		rule: "combine",
+		message: "Combining needs at least 2 UTXOs."
+	});
+	if (details.inputs.length > 50) violations.push({
+		rule: "combine",
+		message: `The send combines ${details.inputs.length} UTXOs; at most 50 go in 1 transaction.`
+	});
 	return violations;
 }
 function checkCChainExport(details, own, ownEvm, rules, expected) {
@@ -39155,6 +39187,7 @@ function checkSigningPolicy(details, ctx) {
 		});
 		violations.push(...checkOutputs("Output", details.outputs, own, rules));
 		if (details.txType === "ExportTx") violations.push(...checkPChainExport(details, own, ownCChain, rules, ctx.expectedTransfer));
+		if (details.txType === "BaseTx") violations.push(...checkCombine(details));
 	}
 	if (details.txType === "AddPermissionlessValidatorTx") {
 		violations.push(...checkValidator(details, own, rules, ctx.nowSeconds));
@@ -69961,21 +69994,6 @@ var P_PATH = "m/44'/9000'/0'";
 var C_PATH = "m/44'/60'/0'";
 var X_CHAIN_IDS = ["2oYMBNV4eNHyqk2fjjV5nVQLDbtmNJzq5s3qs3Lo6ftnC6FByM", "2JVSBoinj9C2J33VntvzYtVJNZdN2NKiwwKjcumHUWEb5DbBrm"];
 var C_CHAIN_IDS = [NETWORK_RULES.mainnet.cChainId, NETWORK_RULES.fuji.cChainId];
-/**
-* An amount as the firmware prints it: nAVAX divided as a 64-bit float
-* and written in its shortest form, such as `1.5 AVAX` or `2000 AVAX`,
-* never in exponent form.
-*/
-function keystoneAvax(nAvax) {
-	const avax = Number(nAvax) / 1e9;
-	let text = String(avax);
-	if (text.includes("e")) {
-		text = avax.toFixed(9);
-		while (text.endsWith("0")) text = text.slice(0, -1);
-		if (text.endsWith(".")) text = text.slice(0, -1);
-	}
-	return `${text} AVAX`;
-}
 var sum = (items) => (items ?? []).reduce((total, item) => total + item.amount, 0n);
 function soleAddress(addresses) {
 	if (addresses.length === 0 || addresses.some((a) => a === "")) return void 0;
@@ -70014,6 +70032,24 @@ function keystoneScreen(details, walletIndex) {
 	let network;
 	let rewardAddress;
 	switch (details.txType) {
+		case "BaseTx":
+			totalIn = sum(details.inputs);
+			lines = details.outputs.map((o) => ({
+				amount: o.amount,
+				address: firstOwner(o)
+			}));
+			method = {
+				key: "Method",
+				value: "Send"
+			};
+			network = {
+				key: "Network",
+				value: "Avalanche P-Chain"
+			};
+			from = soleAddress(lines.map((l) => l.address));
+			fromPath = pPath;
+			tagsChange = true;
+			break;
 		case "AddPermissionlessValidatorTx": {
 			totalIn = sum(details.inputs);
 			lines = [...details.outputs, ...details.stakeOutputs ?? []].map((o) => ({
@@ -70190,7 +70226,7 @@ var Overview = ({ screen }) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(impo
 	screen.network && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
 		label: screen.network.key,
 		children: screen.network.value
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+	}), screen.network.subnet && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
 		label: "Subnet ID",
 		children: screen.network.subnet
 	})] }),
@@ -70218,7 +70254,7 @@ var Details = ({ screen }) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(impor
 	screen.network && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
 		label: screen.network.key,
 		children: screen.network.value
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+	}), screen.network.subnet && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
 		label: "Subnet ID",
 		children: screen.network.subnet
 	})] }),
