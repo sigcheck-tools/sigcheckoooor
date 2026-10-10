@@ -88,6 +88,12 @@ body {
   color: #fca5a5;
 }
 
+/* What only the user can check, in bold red so it is not skimmed past. */
+.must-check {
+  color: #f87171;
+  font-weight: 700;
+}
+
 /* Scanning */
 .camera-picker {
   display: flex;

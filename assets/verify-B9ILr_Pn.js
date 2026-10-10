@@ -69849,9 +69849,16 @@ var RequestReport = ({ details, check, checkedAt, onScanAgain }) => {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "mono address",
 						children: check.keystoneExportRecipient
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "note",
-						children: "Neither this phone nor the Keystone can tell whether this is your C-Chain key, and the AVAX goes wherever it says. Compare every character with the From line the Keystone showed when it signed an earlier import onto the C-Chain, which it works out from that key. Without such a note, this check relies on the computer that built the request, so move a small amount first and write down the From line of its import. It must not be this export's own From address, your P-Chain key, which cannot bring the AVAX in on the C-Chain."
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+								className: "must-check",
+								children: "Neither this phone nor the Keystone can tell whether this is your C-Chain key, and the AVAX goes wherever it says."
+							}),
+							" ",
+							"Compare every character with the From line the Keystone showed when it signed an earlier import onto the C-Chain, which it works out from that key. Without such a note, this check relies on the computer that built the request, so move a small amount first and write down the From line of its import. It must not be this export's own From address, your P-Chain key, which cannot bring the AVAX in on the C-Chain."
+						]
 					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
