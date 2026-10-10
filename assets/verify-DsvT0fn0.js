@@ -39063,11 +39063,12 @@ var AVAX_ASSET_IDS = new Set(["FvwEAhmxKfeiG8SnEvq42hc6whRyY3EFYAvebMqDNDGCgxN5Z
 function isAvaxAsset(assetId) {
 	return AVAX_ASSET_IDS.has(assetId);
 }
+var avaxNumber = (nAvax, maxDecimals) => (Number(nAvax) / 1e9).toLocaleString(void 0, {
+	minimumFractionDigits: 2,
+	maximumFractionDigits: maxDecimals
+});
 function formatAvax(nAvax) {
-	return `${(Number(nAvax) / 1e9).toLocaleString(void 0, {
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 9
-	})} AVAX`;
+	return `${avaxNumber(nAvax, 9)} AVAX`;
 }
 function formatAmount(nAvax, assetId) {
 	if (!assetId || isAvaxAsset(assetId)) return formatAvax(nAvax);
