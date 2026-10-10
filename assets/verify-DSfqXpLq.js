@@ -38981,6 +38981,7 @@ var NETWORKS = {
 		rpcUrl: "https://api.avax.network",
 		glacierUrl: "https://glacier-api.avax.network",
 		glacierNetwork: "mainnet",
+		cChainEvmId: "43114",
 		pChainExplorers: [{
 			name: "Avascan",
 			url: "https://avascan.info/blockchain/p/tx/{txId}"
@@ -38999,6 +39000,13 @@ var NETWORKS = {
 			name: "the Avalanche Explorer",
 			url: "https://subnets.avax.network/c-chain/tx/{txId}"
 		}],
+		cChainTxExplorers: [{
+			name: "Avascan",
+			url: "https://avascan.info/blockchain/c/tx/{txId}"
+		}, {
+			name: "Snowtrace",
+			url: "https://snowtrace.io/tx/{txId}"
+		}],
 		cChainAddressExplorers: [{
 			name: "Avascan",
 			url: "https://avascan.info/blockchain/c/address/{address}"
@@ -39014,6 +39022,7 @@ var NETWORKS = {
 		rpcUrl: "https://api.avax-test.network",
 		glacierUrl: "https://glacier-api.avax.network",
 		glacierNetwork: "fuji",
+		cChainEvmId: "43113",
 		pChainExplorers: [{
 			name: "Avascan",
 			url: "https://testnet.avascan.info/blockchain/p/tx/{txId}"
@@ -39031,6 +39040,13 @@ var NETWORKS = {
 		cChainAtomicTxExplorers: [{
 			name: "the Avalanche Explorer",
 			url: "https://subnets-test.avax.network/c-chain/tx/{txId}"
+		}],
+		cChainTxExplorers: [{
+			name: "Avascan",
+			url: "https://testnet.avascan.info/blockchain/c/tx/{txId}"
+		}, {
+			name: "Snowtrace",
+			url: "https://testnet.snowtrace.io/tx/{txId}"
 		}],
 		cChainAddressExplorers: [{
 			name: "Avascan",
