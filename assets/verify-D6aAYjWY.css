@@ -205,3 +205,107 @@ body {
   font-size: 17px;
   font-weight: 600;
 }
+
+/* The Keystone's Confirm Transaction screen, drawn to look like the
+   device's: dark navy cards, the Value in yellow, amounts in orange. */
+.ks-device {
+  max-width: 420px;
+  margin: 12px auto 0;
+  padding: 14px 12px 16px;
+  background: #121318;
+  border: 6px solid #2b2b2e;
+  border-radius: 24px;
+  color: #e8eaf0;
+}
+
+.ks-title {
+  text-align: center;
+  font-weight: 600;
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.ks-tabs {
+  display: flex;
+  border-bottom: 1px solid #2c2f3a;
+  margin-bottom: 12px;
+}
+
+.ks-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  color: #a3a8b8;
+  font-size: 16px;
+  padding: 8px 0;
+}
+
+.ks-tab-open {
+  color: #fff;
+  font-weight: 600;
+  border-bottom-color: #f5c131;
+}
+
+.ks-card {
+  background: #262b3d;
+  border-radius: 16px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.ks-key {
+  color: #c4c8d4;
+  margin-right: 8px;
+}
+
+.ks-card > .ks-key + .ks-address,
+.ks-card > .ks-key {
+  display: block;
+  margin-top: 6px;
+}
+
+.ks-pair + .ks-pair {
+  margin-top: 6px;
+}
+
+.ks-value {
+  color: #f5c131;
+  font-size: 22px;
+  font-weight: 600;
+  margin: 4px 0 6px;
+}
+
+.ks-address {
+  display: block;
+  word-break: break-all;
+  margin-top: 4px;
+}
+
+.ks-unknown {
+  color: #a3a8b8;
+  font-style: italic;
+}
+
+.ks-line + .ks-line {
+  margin-top: 10px;
+}
+
+.ks-amount {
+  color: #f5870a;
+  margin-left: 16px;
+}
+
+.ks-change {
+  display: inline-block;
+  margin-left: 12px;
+  padding: 0 10px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.2);
+  font-size: 14px;
+}
+
+.ks-path {
+  color: #a3a8b8;
+  margin-top: 4px;
+}

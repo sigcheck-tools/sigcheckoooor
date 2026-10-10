@@ -30094,6 +30094,7 @@ var crypto$1 = typeof globalThis === "object" && "crypto" in globalThis ? global
 //#endregion
 //#region node_modules/@noble/hashes/esm/utils.js
 /*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+var u32 = (arr) => new Uint32Array(arr.buffer, arr.byteOffset, Math.floor(arr.byteLength / 4));
 function isBytes$1(a) {
 	return a instanceof Uint8Array || a != null && typeof a === "object" && a.constructor.name === "Uint8Array";
 }
@@ -30201,6 +30202,9 @@ function randomBytes(bytesLength = 32) {
 }
 //#endregion
 //#region node_modules/@noble/hashes/esm/_assert.js
+function number(n) {
+	if (!Number.isSafeInteger(n) || n < 0) throw new Error(`Wrong positive integer: ${n}`);
+}
 function isBytes(a) {
 	return a instanceof Uint8Array || a != null && typeof a === "object" && a.constructor.name === "Uint8Array";
 }
@@ -38146,6 +38150,198 @@ Object.freeze({
 	}
 });
 //#endregion
+//#region node_modules/@noble/hashes/esm/_u64.js
+var U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
+var _32n = /* @__PURE__ */ BigInt(32);
+function fromBig(n, le = false) {
+	if (le) return {
+		h: Number(n & U32_MASK64),
+		l: Number(n >> _32n & U32_MASK64)
+	};
+	return {
+		h: Number(n >> _32n & U32_MASK64) | 0,
+		l: Number(n & U32_MASK64) | 0
+	};
+}
+function split(lst, le = false) {
+	let Ah = new Uint32Array(lst.length);
+	let Al = new Uint32Array(lst.length);
+	for (let i = 0; i < lst.length; i++) {
+		const { h, l } = fromBig(lst[i], le);
+		[Ah[i], Al[i]] = [h, l];
+	}
+	return [Ah, Al];
+}
+var rotlSH = (h, l, s) => h << s | l >>> 32 - s;
+var rotlSL = (h, l, s) => l << s | h >>> 32 - s;
+var rotlBH = (h, l, s) => l << s - 32 | h >>> 64 - s;
+var rotlBL = (h, l, s) => h << s - 32 | l >>> 64 - s;
+//#endregion
+//#region node_modules/@noble/hashes/esm/sha3.js
+var [SHA3_PI, SHA3_ROTL, _SHA3_IOTA] = [
+	[],
+	[],
+	[]
+];
+var _0n = /* @__PURE__ */ BigInt(0);
+var _1n = /* @__PURE__ */ BigInt(1);
+var _2n = /* @__PURE__ */ BigInt(2);
+var _7n = /* @__PURE__ */ BigInt(7);
+var _256n = /* @__PURE__ */ BigInt(256);
+var _0x71n = /* @__PURE__ */ BigInt(113);
+for (let round = 0, R = _1n, x = 1, y = 0; round < 24; round++) {
+	[x, y] = [y, (2 * x + 3 * y) % 5];
+	SHA3_PI.push(2 * (5 * y + x));
+	SHA3_ROTL.push((round + 1) * (round + 2) / 2 % 64);
+	let t = _0n;
+	for (let j = 0; j < 7; j++) {
+		R = (R << _1n ^ (R >> _7n) * _0x71n) % _256n;
+		if (R & _2n) t ^= _1n << (_1n << /* @__PURE__ */ BigInt(j)) - _1n;
+	}
+	_SHA3_IOTA.push(t);
+}
+var [SHA3_IOTA_H, SHA3_IOTA_L] = /* @__PURE__ */ split(_SHA3_IOTA, true);
+var rotlH = (h, l, s) => s > 32 ? rotlBH(h, l, s) : rotlSH(h, l, s);
+var rotlL = (h, l, s) => s > 32 ? rotlBL(h, l, s) : rotlSL(h, l, s);
+function keccakP(s, rounds = 24) {
+	const B = new Uint32Array(10);
+	for (let round = 24 - rounds; round < 24; round++) {
+		for (let x = 0; x < 10; x++) B[x] = s[x] ^ s[x + 10] ^ s[x + 20] ^ s[x + 30] ^ s[x + 40];
+		for (let x = 0; x < 10; x += 2) {
+			const idx1 = (x + 8) % 10;
+			const idx0 = (x + 2) % 10;
+			const B0 = B[idx0];
+			const B1 = B[idx0 + 1];
+			const Th = rotlH(B0, B1, 1) ^ B[idx1];
+			const Tl = rotlL(B0, B1, 1) ^ B[idx1 + 1];
+			for (let y = 0; y < 50; y += 10) {
+				s[x + y] ^= Th;
+				s[x + y + 1] ^= Tl;
+			}
+		}
+		let curH = s[2];
+		let curL = s[3];
+		for (let t = 0; t < 24; t++) {
+			const shift = SHA3_ROTL[t];
+			const Th = rotlH(curH, curL, shift);
+			const Tl = rotlL(curH, curL, shift);
+			const PI = SHA3_PI[t];
+			curH = s[PI];
+			curL = s[PI + 1];
+			s[PI] = Th;
+			s[PI + 1] = Tl;
+		}
+		for (let y = 0; y < 50; y += 10) {
+			for (let x = 0; x < 10; x++) B[x] = s[y + x];
+			for (let x = 0; x < 10; x++) s[y + x] ^= ~B[(x + 2) % 10] & B[(x + 4) % 10];
+		}
+		s[0] ^= SHA3_IOTA_H[round];
+		s[1] ^= SHA3_IOTA_L[round];
+	}
+	B.fill(0);
+}
+var Keccak = class Keccak extends Hash {
+	constructor(blockLen, suffix, outputLen, enableXOF = false, rounds = 24) {
+		super();
+		this.blockLen = blockLen;
+		this.suffix = suffix;
+		this.outputLen = outputLen;
+		this.enableXOF = enableXOF;
+		this.rounds = rounds;
+		this.pos = 0;
+		this.posOut = 0;
+		this.finished = false;
+		this.destroyed = false;
+		number(outputLen);
+		if (0 >= this.blockLen || this.blockLen >= 200) throw new Error("Sha3 supports only keccak-f1600 function");
+		this.state = new Uint8Array(200);
+		this.state32 = u32(this.state);
+	}
+	keccak() {
+		keccakP(this.state32, this.rounds);
+		this.posOut = 0;
+		this.pos = 0;
+	}
+	update(data) {
+		exists(this);
+		const { blockLen, state } = this;
+		data = toBytes(data);
+		const len = data.length;
+		for (let pos = 0; pos < len;) {
+			const take = Math.min(blockLen - this.pos, len - pos);
+			for (let i = 0; i < take; i++) state[this.pos++] ^= data[pos++];
+			if (this.pos === blockLen) this.keccak();
+		}
+		return this;
+	}
+	finish() {
+		if (this.finished) return;
+		this.finished = true;
+		const { state, suffix, pos, blockLen } = this;
+		state[pos] ^= suffix;
+		if ((suffix & 128) !== 0 && pos === blockLen - 1) this.keccak();
+		state[blockLen - 1] ^= 128;
+		this.keccak();
+	}
+	writeInto(out) {
+		exists(this, false);
+		bytes(out);
+		this.finish();
+		const bufferOut = this.state;
+		const { blockLen } = this;
+		for (let pos = 0, len = out.length; pos < len;) {
+			if (this.posOut >= blockLen) this.keccak();
+			const take = Math.min(blockLen - this.posOut, len - pos);
+			out.set(bufferOut.subarray(this.posOut, this.posOut + take), pos);
+			this.posOut += take;
+			pos += take;
+		}
+		return out;
+	}
+	xofInto(out) {
+		if (!this.enableXOF) throw new Error("XOF is not possible for this instance");
+		return this.writeInto(out);
+	}
+	xof(bytes) {
+		number(bytes);
+		return this.xofInto(new Uint8Array(bytes));
+	}
+	digestInto(out) {
+		output(out, this);
+		if (this.finished) throw new Error("digest() was already called");
+		this.writeInto(out);
+		this.destroy();
+		return out;
+	}
+	digest() {
+		return this.digestInto(new Uint8Array(this.outputLen));
+	}
+	destroy() {
+		this.destroyed = true;
+		this.state.fill(0);
+	}
+	_cloneInto(to) {
+		const { blockLen, suffix, outputLen, rounds, enableXOF } = this;
+		to || (to = new Keccak(blockLen, suffix, outputLen, enableXOF, rounds));
+		to.state32.set(this.state32);
+		to.pos = this.pos;
+		to.posOut = this.posOut;
+		to.finished = this.finished;
+		to.rounds = rounds;
+		to.suffix = suffix;
+		to.outputLen = outputLen;
+		to.enableXOF = enableXOF;
+		to.destroyed = this.destroyed;
+		return to;
+	}
+};
+var gen = (suffix, blockLen, outputLen) => wrapConstructor(() => new Keccak(blockLen, suffix, outputLen));
+/**
+* keccak-256 hash function. Different from SHA3-256.
+* @param message - that would be hashed
+*/
+var keccak_256 = /* @__PURE__ */ gen(1, 136, 256 / 8);
+//#endregion
 //#region src/lib/addresses.ts
 /**
 * An address in the 1 form it has whichever way it is written: without a
@@ -38171,6 +38367,11 @@ function withPChainPrefix(address) {
 */
 function keystoneAddress(address) {
 	return Cc.formatBech32("avax", Cc.bech32ToBytes(address));
+}
+/** Apply EIP-55 mixed-case checksum to a 40-character lowercase hex address. */
+function toChecksumAddress(hex) {
+	const hash = bytesToHex(keccak_256(hex));
+	return `0x${[...hex].map((c, i) => parseInt(hash[i], 16) >= 8 ? c.toUpperCase() : c).join("")}`;
 }
 //#endregion
 //#region src/lib/parseTxDetails.ts
@@ -50696,7 +50897,7 @@ var __extends$28 = (function() {
 		d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
 	};
 })();
-var Pair = function(_super) {
+var Pair$1 = function(_super) {
 	__extends$28(Pair, _super);
 	function Pair(value, checksumPortion, finderPattern) {
 		var _this = _super.call(this, value, checksumPortion) || this;
@@ -50861,7 +51062,7 @@ var RSS14Reader = function(_super) {
 			}
 			var outside = this.decodeDataCharacter(row, pattern, true);
 			var inside = this.decodeDataCharacter(row, pattern, false);
-			return new Pair(1597 * outside.getValue() + inside.getValue(), outside.getChecksumPortion() + 4 * inside.getChecksumPortion(), pattern);
+			return new Pair$1(1597 * outside.getValue() + inside.getValue(), outside.getChecksumPortion() + 4 * inside.getChecksumPortion(), pattern);
 		} catch (err) {
 			return null;
 		}
@@ -69719,17 +69920,364 @@ var ScanRequest = ({ onScan, error }) => {
 	});
 };
 //#endregion
-//#region src/verify/RequestReport.tsx
-function keystoneMethod(details) {
-	switch (details.txType) {
-		case "AddPermissionlessValidatorTx": return "AddPermlessValidator";
-		case "CChainExportTx": return "C to P Export";
-		case "ImportTx": return "Import Tx, Sending from C-Chain";
-		case "ExportTx": return knownNetwork(details.networkId) === "mainnet" ? "P to C Export" : "P to Unknown Export";
-		case "CChainImportTx": return "Import Tx, Sending from P-Chain";
-		default: return details.txType;
+//#region src/verify/expectedScreen.ts
+var P_PATH = "m/44'/9000'/0'";
+var C_PATH = "m/44'/60'/0'";
+var X_CHAIN_IDS = ["2oYMBNV4eNHyqk2fjjV5nVQLDbtmNJzq5s3qs3Lo6ftnC6FByM", "2JVSBoinj9C2J33VntvzYtVJNZdN2NKiwwKjcumHUWEb5DbBrm"];
+var C_CHAIN_IDS = [NETWORK_RULES.mainnet.cChainId, NETWORK_RULES.fuji.cChainId];
+/**
+* An amount as the firmware prints it: nAVAX divided as a 64-bit float
+* and written in its shortest form, such as `1.5 AVAX` or `2000 AVAX`,
+* never in exponent form.
+*/
+function keystoneAvax(nAvax) {
+	const avax = Number(nAvax) / 1e9;
+	let text = String(avax);
+	if (text.includes("e")) {
+		text = avax.toFixed(9);
+		while (text.endsWith("0")) text = text.slice(0, -1);
+		if (text.endsWith(".")) text = text.slice(0, -1);
 	}
+	return `${text} AVAX`;
 }
+var sum = (items) => (items ?? []).reduce((total, item) => total + item.amount, 0n);
+function soleAddress(addresses) {
+	if (addresses.length === 0 || addresses.some((a) => a === "")) return void 0;
+	return new Set(addresses).size === 1 ? addresses[0] : void 0;
+}
+var MAX_DATE_SECONDS$1 = 8640000000000n;
+var screenTime = (unixSeconds) => unixSeconds > MAX_DATE_SECONDS$1 ? `out of range (${unixSeconds} seconds)` : keystoneTime(unixSeconds);
+function exportDestination(chain, cChainIds) {
+	if (chain === "11111111111111111111111111111111LpoYY") return "P";
+	if (chain && X_CHAIN_IDS.includes(chain)) return "X";
+	if (chain && cChainIds.includes(chain)) return "C";
+	return "Unknown";
+}
+function importSource(chain) {
+	if (chain === "11111111111111111111111111111111LpoYY") return "Sending from P-Chain";
+	if (chain && X_CHAIN_IDS.includes(chain)) return "Sending from X-Chain";
+	if (chain && C_CHAIN_IDS.includes(chain)) return "Sending from C-Chain";
+	return "Unknown";
+}
+var firstOwner = (output) => output.addresses[0] ? keystoneAddress(output.addresses[0]) : "";
+/**
+* The Keystone's screen for a transaction this tool builds, or null for
+* any other type. `walletIndex` is the account the request asks the
+* Keystone to sign with, which sets the key path it shows.
+*/
+function keystoneScreen(details, walletIndex) {
+	const pPath = walletIndex === void 0 ? void 0 : `${P_PATH}/0/${walletIndex}`;
+	const cPath = walletIndex === void 0 ? void 0 : `${C_PATH}/0/${walletIndex}`;
+	let totalIn;
+	let lines;
+	let method;
+	let from;
+	let fromPath;
+	let isImport = false;
+	let tagsChange = false;
+	let network;
+	let rewardAddress;
+	switch (details.txType) {
+		case "AddPermissionlessValidatorTx": {
+			totalIn = sum(details.inputs);
+			lines = [...details.outputs, ...details.stakeOutputs ?? []].map((o) => ({
+				amount: o.amount,
+				address: firstOwner(o)
+			}));
+			const start = details.startTime ?? 0n;
+			const end = details.endTime ?? 0n;
+			method = {
+				key: "Method",
+				value: "AddPermlessValidator",
+				...start !== 0n && end !== 0n && {
+					startTime: screenTime(start),
+					endTime: screenTime(end)
+				}
+			};
+			network = {
+				key: "Network",
+				value: "Avalanche P-Chain",
+				subnet: "Primary Subnet"
+			};
+			const rewardOwner = details.validatorRewardsOwner?.addresses[0];
+			rewardAddress = rewardOwner ? keystoneAddress(rewardOwner) : "";
+			from = soleAddress(lines.map((l) => l.address));
+			fromPath = pPath;
+			tagsChange = true;
+			break;
+		}
+		case "ExportTx":
+			totalIn = sum(details.inputs);
+			lines = [...details.outputs, ...details.exportedOutputs ?? []].map((o) => ({
+				amount: o.amount,
+				address: firstOwner(o)
+			}));
+			method = {
+				key: "Export Tx",
+				value: `P to ${exportDestination(details.destinationChain, [NETWORK_RULES.mainnet.cChainId])} Export`
+			};
+			from = soleAddress(details.outputs.map(firstOwner));
+			fromPath = pPath;
+			break;
+		case "ImportTx":
+			totalIn = sum(details.importedInputs);
+			lines = details.outputs.map((o) => ({
+				amount: o.amount,
+				address: firstOwner(o)
+			}));
+			method = {
+				key: "Import Tx",
+				value: importSource(details.sourceChain)
+			};
+			from = soleAddress(lines.map((l) => l.address));
+			fromPath = pPath;
+			isImport = true;
+			break;
+		case "CChainExportTx": {
+			totalIn = sum(details.evmInputs);
+			lines = (details.exportedOutputs ?? []).map((o) => ({
+				amount: o.amount,
+				address: firstOwner(o)
+			}));
+			method = {
+				key: "Export Tx",
+				value: `C to ${exportDestination(details.destinationChain, C_CHAIN_IDS)} Export`
+			};
+			const senders = new Set((details.evmInputs ?? []).map((input) => input.address.toLowerCase()));
+			from = senders.size === 1 ? toChecksumAddress([...senders][0].slice(2)) : void 0;
+			fromPath = cPath;
+			break;
+		}
+		case "CChainImportTx":
+			totalIn = sum(details.importedInputs);
+			lines = (details.evmOutputs ?? []).map((o) => ({
+				amount: o.amount,
+				address: o.address.toLowerCase()
+			}));
+			method = {
+				key: "Import Tx",
+				value: importSource(details.sourceChain)
+			};
+			from = void 0;
+			fromPath = void 0;
+			isImport = true;
+			break;
+		default: return null;
+	}
+	const totalOut = sum(lines);
+	const fee = totalIn - totalOut;
+	return {
+		value: keystoneAvax(totalIn - (isImport ? 0n : fee) - ((details.txType === "ImportTx" ? void 0 : lines.find((l) => from !== void 0 && l.address === from))?.amount ?? 0n)),
+		fee: keystoneAvax(fee),
+		...network && { network },
+		method,
+		inputValue: keystoneAvax(totalIn),
+		outputValue: keystoneAvax(totalOut),
+		...rewardAddress !== void 0 && { rewardAddress },
+		from: {
+			amount: keystoneAvax(totalIn),
+			address: from,
+			...fromPath && { path: fromPath }
+		},
+		to: lines.map((line, index) => {
+			const change = tagsChange && from !== void 0 && line.address === from;
+			return {
+				index,
+				amount: keystoneAvax(line.amount),
+				address: line.address,
+				change,
+				...change && pPath && { path: pPath }
+			};
+		})
+	};
+}
+//#endregion
+//#region src/verify/KeystoneScreen.tsx
+var OwnAddress = ({ address }) => address ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+	className: "ks-address",
+	children: address
+}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+	className: "ks-address ks-unknown",
+	children: "Your own address, which only the Keystone works out"
+});
+var Card = ({ children }) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	className: "ks-card",
+	children
+});
+var Pair = ({ label, children }) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+	className: "ks-pair",
+	children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ks-key",
+			children: label
+		}),
+		" ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children })
+	]
+});
+var Line = ({ line, children }) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+	className: "ks-line",
+	children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+			line.index,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ks-amount",
+				children: line.amount
+			}),
+			line.change && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ks-change",
+				children: "Change"
+			})
+		] }),
+		children,
+		line.path && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ks-path",
+			children: line.path
+		})
+	]
+});
+var Overview = ({ screen }) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+	/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ks-key",
+			children: "Value"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ks-value",
+			children: screen.value
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+			label: "Fee",
+			children: screen.fee
+		})
+	] }),
+	screen.network && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+		label: screen.network.key,
+		children: screen.network.value
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+		label: "Subnet ID",
+		children: screen.network.subnet
+	})] }),
+	/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Card, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+		label: screen.method.key,
+		children: screen.method.value
+	}) }),
+	/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ks-key",
+			children: "From"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OwnAddress, { address: screen.from.address }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ks-key",
+			children: "To"
+		}),
+		screen.to.map((line) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ks-address",
+			children: line.address
+		}, line.index))
+	] })
+] });
+var Details = ({ screen }) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+	screen.network && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+		label: screen.network.key,
+		children: screen.network.value
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+		label: "Subnet ID",
+		children: screen.network.subnet
+	})] }),
+	/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+			label: screen.method.key,
+			children: screen.method.value
+		}),
+		screen.method.startTime && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+			label: "Start time",
+			children: screen.method.startTime
+		}),
+		screen.method.endTime && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+			label: "End Time",
+			children: screen.method.endTime
+		})
+	] }),
+	/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+			label: "Input Value",
+			children: screen.inputValue
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+			label: "Output Value",
+			children: screen.outputValue
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pair, {
+			label: "Fee",
+			children: screen.fee
+		})
+	] }),
+	screen.rewardAddress !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ks-key",
+		children: "Reward Address"
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "ks-address",
+		children: screen.rewardAddress
+	})] }),
+	/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ks-key",
+		children: "From"
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+		line: {
+			index: 0,
+			amount: screen.from.amount,
+			change: false,
+			path: screen.from.path
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OwnAddress, { address: screen.from.address })
+	})] }),
+	/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ks-key",
+		children: "To"
+	}), screen.to.map((line) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+		line,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ks-address",
+			children: line.address
+		})
+	}, line.index))] })
+] });
+/**
+* The Keystone's Confirm Transaction screen as this request should make
+* it look, with the device's Overview and Details tabs.
+*/
+var KeystoneScreen = ({ screen }) => {
+	const [tab, setTab] = (0, import_react.useState)("overview");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ks-device",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ks-title",
+				children: "Confirm Transaction"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ks-tabs",
+				role: "tablist",
+				children: ["overview", "details"].map((name) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					role: "tab",
+					"aria-selected": tab === name,
+					className: tab === name ? "ks-tab ks-tab-open" : "ks-tab",
+					onClick: () => setTab(name),
+					children: name === "overview" ? "Overview" : "Details"
+				}, name))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ks-body",
+				role: "tabpanel",
+				children: tab === "overview" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Overview, { screen }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Details, { screen })
+			})
+		]
+	});
+};
+//#endregion
+//#region src/verify/RequestReport.tsx
 function utc(unixSeconds) {
 	return (/* @__PURE__ */ new Date(Number(unixSeconds) * 1e3)).toISOString().replace("T", " ").slice(0, 19) + " UTC";
 }
@@ -69759,11 +70307,11 @@ var Owner = ({ owner, stakeableLocktime }) => /* @__PURE__ */ (0, import_jsx_run
 })] });
 var RequestReport = ({ details, check, checkedAt, onScanAgain }) => {
 	const isValidator = details.txType === "AddPermissionlessValidatorTx";
+	const screen = (0, import_react.useMemo)(() => keystoneScreen(details, check.walletIndex), [details, check.walletIndex]);
 	const isExport = details.txType === "CChainExportTx";
 	const isPChainExport = details.txType === "ExportTx";
 	const isCChainImport = details.txType === "CChainImportTx";
 	const fee = computeFee(details);
-	const amount = isValidator ? details.stakeAmount : isExport || isPChainExport ? sumAvax(details.exportedOutputs ?? []) : details.importedInputs ? sumAvax(details.importedInputs) : sumAvax(details.outputs);
 	const outputs = [
 		...details.outputs.map((o, i) => [isValidator || isPChainExport ? `Change ${i + 1}` : `Output ${i + 1}`, o]),
 		...(details.stakeOutputs ?? []).map((o, i) => [`Stake ${i + 1}`, o]),
@@ -69793,6 +70341,14 @@ var RequestReport = ({ details, check, checkedAt, onScanAgain }) => {
 				})
 			]
 		}),
+		check.pass && screen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "What the Keystone should show" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "hint",
+				children: "Its Overview and Details tabs as this request should draw them. Reject it on the Keystone if any line differs. The From address is the one thing the Keystone works out from its own key, so this phone shows the one it expects, and says so where it cannot tell."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(KeystoneScreen, { screen })
+		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Compare with the Keystone" }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -69862,15 +70418,15 @@ var RequestReport = ({ details, check, checkedAt, onScanAgain }) => {
 					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
-					label: "Method",
+					label: screen?.method.key ?? "Method",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "mono",
-						children: keystoneMethod(details)
+						children: screen?.method.value ?? details.txType
 					})
 				}),
-				amount !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
-					label: isValidator ? "Stake" : "Value",
-					children: formatAvax(amount)
+				screen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
+					label: "Value",
+					children: screen.value
 				}),
 				isValidator && details.endTime !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Row, {
 					label: "End time",
